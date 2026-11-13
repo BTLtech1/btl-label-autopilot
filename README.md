@@ -55,7 +55,7 @@ Click **Deploy**. When it's done, open your new Worker's address (it ends in `.w
 Fill in:
 
 - **Return address**, including email and phone (Shippo requires them).
-- **Package**: size of your usual box or mailer, and its usual weight.
+- **Packages**: the sizes you ship in (a 6x9 mailer, a small box...). Item codes can pick which one an item needs.
 - **Never spend more than**: orders whose cheapest label costs more wait for you in Shippo instead.
 - **Item codes**: if an item's title contains these words, its code prints big on the label (`gen 3` → `G3`). Add the packed weight too if you know it.
 - **Shippo test key** (optional), for free test labels.

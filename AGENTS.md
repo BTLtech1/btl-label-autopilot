@@ -13,7 +13,7 @@ You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Wo
 
 1. Sale on a marketplace → Shippo imports it as an order (the person connects stores in Shippo).
 2. Cron every 15 min (`wrangler.jsonc`) → `checkOrders()` lists Shippo orders with `order_status[]=PAID` and `start_date` = KV `orders_since` (set when auto-buy is first switched on). It skips orders with `shop_app` "Shippo"/"CSV_Import", orders that already have a transaction, and ones marked in KV `order:<id>`.
-3. `buyAndQueue()`: POST `/shipments/` (from address in settings, parcel from settings, weight from item rules → order weight → default), picks the cheapest rate (USPS only unless set to any), enforces the price cap, POST `/transactions/` with `label_file_type: "PNG"` and `order` (so Shippo marks it shipped and sends tracking to the marketplace), downloads the PNG and stores it as KV `job:<id>` with metadata `{text}` (item codes + store tag), and appends the id to KV `queue`.
+3. `buyAndQueue()`: POST `/shipments/` (from address in settings, package from settings, weight from item rules → order weight → default), picks the cheapest rate (USPS only unless set to any), enforces the price cap, POST `/transactions/` with `label_file_type: "PNG"` and `order` (so Shippo marks it shipped and sends tracking to the marketplace), downloads the PNG and stores it as KV `job:<id>` with metadata `{text}` (item codes + store tag), and appends the id to KV `queue`.
 4. Bridge polls `GET /print/next` (Bearer token = KV `print_token`, header `X-Bridge-Accepts: image/png`). The response is the PNG with headers `X-Job-Id` and `X-Label-Text`. The bridge decodes the PNG, scales it to 4x6 at 203 dpi, prints it as ZPL `^GFA` or TSPL `BITMAP`, overlays the text, then calls `POST /print/ack?id=`. KV reads can lag ~60 s, so the bridge (firmware 1.9.2+) also remembers recent job ids and never prints one twice.
 5. Optional Stripe: `POST /stripe` (signature check with `STRIPE_WEBHOOK_SECRET`; line items read with `STRIPE_API_KEY`). If the label can't be bought, it creates a Shippo order instead.
 
@@ -25,7 +25,7 @@ You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Wo
 
 ## Settings (KV key `settings`, edited on `/admin`)
 
-`autoBuy`, `capCents`, `carriers` ("usps" | "any"), `parcel` {length,width,height in inches}, `defaultOz`, `from` {name, street1, street2, city, state, zip, email, phone}. Shippo requires email and phone. Also `stores` (comma list of Shippo `shop_app` names; blank = all), `rules` [{match, code, oz}] (case-insensitive "contains", `|` = or, first match wins), `showSite`, `siteTags`, `testKey`.
+`autoBuy`, `capCents`, `carriers` ("usps" | "any"), `packages` [{name, length, width, height in inches}] (first is the default), `defaultOz`, `from` {name, street1, street2, city, state, zip, email, phone}. Shippo requires email and phone. Also `stores` (comma list of Shippo `shop_app` names; blank = all), `rules` [{match, code, oz, pkg}] (pkg = index into packages; an order uses the biggest package its items need) (case-insensitive "contains", `|` = or, first match wins), `showSite`, `siteTags`, `testKey`.
 
 ## Common problems
 

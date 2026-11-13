@@ -29,7 +29,7 @@ const DEFAULTS = {
   autoBuy: false,
   capCents: 800,
   carriers: "usps",                   // "usps" or "any"
-  parcel: { length: 9, width: 6, height: 1 },
+  packages: [{ name: "6x9 bubble mailer", length: 9, width: 6, height: 1 }],
   defaultOz: 4,
   from: { name: "", street1: "", street2: "", city: "", state: "", zip: "", email: "", phone: "" },
   stores: "",                         // blank = every store connected in Shippo
@@ -61,7 +61,7 @@ async function getSettings(env) {
   const s = (await env.LABELS.get("settings", "json")) || {};
   return {
     ...DEFAULTS, ...s,
-    parcel: { ...DEFAULTS.parcel, ...(s.parcel || {}) },
+    packages: s.packages?.length ? s.packages : s.parcel ? [{ name: "Package", ...s.parcel }] : DEFAULTS.packages,
     from: { ...DEFAULTS.from, ...(s.from || {}) },
     siteTags: { ...DEFAULTS.siteTags, ...(s.siteTags || {}) },
   };
@@ -93,6 +93,18 @@ function codesFor(lines, rules) {
     const code = r ? r.code : (li.title || "ITEM").split(/\s+/).slice(0, 2).join(" ").toUpperCase();
     return (li.quantity > 1 ? `${li.quantity}x ` : "") + code;
   }).join(", ");
+}
+
+// The package for an order: the biggest one any of its items needs (items with no rule use package 1).
+function packageFor(lines, s) {
+  const pk = s.packages;
+  let best = pk[0];
+  for (const li of lines) {
+    const r = ruleFor(li.title, s.rules);
+    const p = pk[r && Number.isInteger(r.pkg) ? r.pkg : 0] || pk[0];
+    if (p.length * p.width * p.height > best.length * best.width * best.height) best = p;
+  }
+  return best;
 }
 
 function ouncesFor(lines, rules, fallbackOz) {
@@ -133,12 +145,13 @@ function shippoError(data) {
 }
 
 // Rates the parcel, buys the cheapest allowed label, downloads the picture and queues it.
-async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWords, capCents }) {
+async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWords, capCents, pkg }) {
+  const box = pkg || s.packages[0];
   const from = { ...s.from, country: "US" };
   const shipment = await shippo("/shipments/", key, {
     address_from: from,
     address_to: addressTo,
-    parcels: [{ length: String(s.parcel.length), width: String(s.parcel.width), height: String(s.parcel.height),
+    parcels: [{ length: String(box.length), width: String(box.width), height: String(box.height),
                 distance_unit: "in", weight: Number(oz).toFixed(2), mass_unit: "oz" }],
     async: false,
     metadata: ref,
@@ -201,7 +214,7 @@ async function checkOrders(env) {
     const ref = `${app || "Order"} ${o.order_number || o.object_id.slice(-8)}`;
 
     const r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
-      addressTo: o.to_address?.object_id || o.to_address, oz, orderId: o.object_id, ref, labelWords: labelText(codes, tag),
+      addressTo: o.to_address?.object_id || o.to_address, oz, orderId: o.object_id, ref, labelWords: labelText(codes, tag), pkg: packageFor(lines, s),
     });
     await env.LABELS.put(doneKey, JSON.stringify(r), { expirationTtl: KEEP_ORDERS });
     const entry = { at: new Date().toISOString(), order: ref, codes, ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) };
@@ -240,7 +253,7 @@ async function stripeHook(request, env) {
   if (s.autoBuy && env.SHIPPO_API_KEY && fromReady(s)) {
     await env.LABELS.put(doneKey, "buying", { expirationTtl: KEEP_ORDERS });
     r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
-      addressTo, oz: ouncesFor(lines, s.rules, s.defaultOz), ref,
+      addressTo, oz: ouncesFor(lines, s.rules, s.defaultOz), ref, pkg: packageFor(lines, s),
       labelWords: labelText(codes, s.showSite ? s.siteTags.Stripe : ""),
     });
   }
@@ -385,13 +398,22 @@ async function adminRoute(request, url, env) {
   })));
 }
 
+function readPackages(g, num, old) {
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    const l = num(`p${i}l`, 0), w = num(`p${i}w`, 0), h = num(`p${i}h`, 0);
+    if (l && w && h) out.push({ name: g(`p${i}n`) || `Package ${i + 1}`, length: l, width: w, height: h });
+  }
+  return out.length ? out : old.packages;
+}
+
 function readForm(f, old) {
   const g = (k) => String(f.get(k) ?? "").trim();
   const num = (k, d) => { const n = parseFloat(g(k)); return Number.isFinite(n) && n > 0 ? n : d; };
   const rules = [];
   for (let i = 0; i < 40; i++) {
     const match = g(`r${i}m`), code = g(`r${i}c`).toUpperCase().replace(/[^\x20-\x7e]/g, "").slice(0, 12);
-    if (match && code) rules.push({ match, code, oz: num(`r${i}o`, 0) });
+    if (match && code) rules.push({ match, code, oz: num(`r${i}o`, 0), pkg: Math.max(0, parseInt(g(`r${i}p`) || "0", 10) || 0) });
   }
   const siteTags = { ...old.siteTags };
   for (const k of Object.keys(DEFAULTS.siteTags)) { const v = g(`tag_${k}`).toUpperCase().slice(0, 4); if (v) siteTags[k] = v; }
@@ -400,7 +422,7 @@ function readForm(f, old) {
     autoBuy: f.get("autoBuy") === "on",
     capCents: Math.round(num("cap", old.capCents / 100) * 100),
     carriers: g("carriers") === "any" ? "any" : "usps",
-    parcel: { length: num("pl", old.parcel.length), width: num("pw", old.parcel.width), height: num("ph", old.parcel.height) },
+    packages: readPackages(g, num, old),
     defaultOz: num("defaultOz", old.defaultOz),
     from: { name: g("fname"), street1: g("fstreet1"), street2: g("fstreet2"), city: g("fcity"), state: g("fstate").toUpperCase(),
             zip: g("fzip"), email: g("femail"), phone: g("fphone") },
@@ -419,7 +441,13 @@ function settingsHtml(s, x) {
   const rows = [...s.rules, ...Array(Math.max(3, 8 - s.rules.length)).fill({ match: "", code: "", oz: "" })].map((r, i) => `
     <tr><td><input name="r${i}m" value="${esc(r.match)}" placeholder="e.g. gen 3"></td>
         <td><input name="r${i}c" value="${esc(r.code)}" placeholder="G3" class="code"></td>
-        <td><input name="r${i}o" value="${esc(r.oz || "")}" placeholder="2" class="oz" inputmode="decimal"></td></tr>`).join("");
+        <td><input name="r${i}o" value="${esc(r.oz || "")}" placeholder="2" class="oz" inputmode="decimal"></td>
+        <td><select name="r${i}p">${s.packages.map((p, j) => `<option value="${j}" ${(r.pkg || 0) === j ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></td></tr>`).join("");
+  const pkgRows = [...s.packages, ...Array(Math.max(0, 4 - s.packages.length)).fill({ name: "", length: "", width: "", height: "" })].map((p, i) => `
+    <tr><td><input name="p${i}n" value="${esc(p.name)}" placeholder="${i ? "e.g. Small box" : "6x9 bubble mailer"}"></td>
+        <td><input name="p${i}l" value="${esc(p.length)}" class="oz" inputmode="decimal"></td>
+        <td><input name="p${i}w" value="${esc(p.width)}" class="oz" inputmode="decimal"></td>
+        <td><input name="p${i}h" value="${esc(p.height)}" class="oz" inputmode="decimal"></td></tr>`).join("");
   const tags = Object.keys(DEFAULTS.siteTags).map((k) => `<label class="tag">${k === "Stripe" ? "Your site (Stripe)" : k}
     <input name="tag_${k}" value="${esc(s.siteTags[k])}" maxlength="4"></label>`).join("");
   const log = x.log.length ? x.log.slice(0, 12).map((e) => `<tr><td>${esc(new Date(e.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}</td>
@@ -460,12 +488,11 @@ function settingsHtml(s, x) {
       <label>Carrier<select name="carriers"><option value="usps" ${s.carriers === "usps" ? "selected" : ""}>USPS only</option><option value="any" ${s.carriers === "any" ? "selected" : ""}>Cheapest of any carrier</option></select></label>
     </div>
     <p class="muted">Orders whose cheapest label costs more than this wait for you in Shippo.</p>
-    <h3>Package</h3>
-    <div class="grid four">
-      ${field("pl", "Length (in)", s.parcel.length, 'inputmode="decimal"')}${field("pw", "Width (in)", s.parcel.width, 'inputmode="decimal"')}
-      ${field("ph", "Height (in)", s.parcel.height, 'inputmode="decimal"')}${field("defaultOz", "Usual weight (oz)", s.defaultOz, 'inputmode="decimal"')}
-    </div>
-    <p class="muted">A 6 x 9 bubble mailer is 9 x 6 x 1. "Usual weight" is used when an item has no weight below.</p>
+    <h3>Packages you ship in</h3>
+    <table class="rules"><tr><th>Name</th><th>Length (in)</th><th>Width (in)</th><th>Height (in)</th></tr>${pkgRows}</table>
+    <p class="muted">The first one is used unless an item code below says otherwise. An order with several items goes in the biggest package any of them needs. A 6 x 9 bubble mailer is 9 x 6 x 1.</p>
+    ${field("defaultOz", "Usual weight (oz)", s.defaultOz, 'inputmode="decimal"')}
+    <p class="muted">Used when an item has no weight below.</p>
     ${field("stores", "Only these stores (leave blank for every store connected in Shippo)", s.stores, 'placeholder="e.g. Etsy, eBay"')}
   </section>
 
@@ -474,7 +501,7 @@ function settingsHtml(s, x) {
     <p class="muted">Printed on every label. Shippo needs the email and phone too.</p>
     <div class="grid">
       ${field("fname", "Name or business", s.from.name)}${field("femail", "Email", s.from.email, 'type="email"')}
-      ${field("fstreet1", "Street", s.from.street1)}${field("fstreet2", "Line 2 (optional)", s.from.street2)}
+      ${field("fstreet1", "Street address or PO Box", s.from.street1)}${field("fstreet2", "Apt, suite, unit or PMB (optional)", s.from.street2)}
       ${field("fcity", "City", s.from.city)}${field("fstate", "State (2 letters)", s.from.state, 'maxlength="2"')}
       ${field("fzip", "ZIP", s.from.zip)}${field("fphone", "Phone", s.from.phone, 'type="tel" placeholder="+1 555 555 5555"')}
     </div>
@@ -484,8 +511,8 @@ function settingsHtml(s, x) {
     <h2>Item codes</h2>
     <p>Short codes printed big on the label, so you know what to pack. If an item's title contains the words, it gets the code.
        Use <code>|</code> for "or" (<code>gen 1|gen 2</code>). The first match wins, so put the more specific ones on top.</p>
-    <table class="rules"><tr><th>Title contains</th><th>Code</th><th>Packed oz</th></tr>${rows}</table>
-    <p class="muted">Save to get more empty rows. Items with no match get the first two words of their title.</p>
+    <table class="rules"><tr><th>Title contains</th><th>Code</th><th>Packed oz</th><th>Package</th></tr>${rows}</table>
+    <p class="muted">Save to get more empty rows. Items with no match get the first two words of their title. Add a package above to choose it here.</p>
     <label class="check"><input type="checkbox" name="showSite" ${s.showSite ? "checked" : ""}> Also print where the order came from</label>
     <div class="tags">${tags}</div>
     <p class="muted">Example on the label: <b>2x G3, SD / ET</b></p>
