@@ -82,6 +82,15 @@ If you sell through your own Stripe Checkout:
 
 Website orders print within seconds, tagged `ST`. If a label can't be bought (over your limit, bad address), the order is put in Shippo for you to handle.
 
+## Updating
+
+The Deploy button made your own copy of this code in your GitHub. To get new versions:
+
+1. Open your copy on GitHub.
+2. If it shows **Sync fork**, click it, then **Update branch**. If it doesn't, open this page, copy `src/index.js`, and paste it over the same file in your copy (pencil icon → paste → **Commit changes**).
+
+Cloudflare redeploys it by itself within a minute. Your settings, address and print queue are kept.
+
 ## Problems
 
 | What you see | Fix |
