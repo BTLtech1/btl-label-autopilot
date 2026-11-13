@@ -171,7 +171,7 @@ async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWord
 async function checkOrders(env) {
   const s = await getSettings(env);
   if (!s.autoBuy) return { skipped: "Auto-buy is switched off on the settings page." };
-  if (!env.SHIPPO_API_KEY) return { skipped: "The SHIPPO_API_KEY secret is missing." };
+  if (!env.SHIPPO_API_KEY || exampleKey(env.SHIPPO_API_KEY)) return { skipped: "The SHIPPO_API_KEY secret is missing or still the example value." };
   if (!fromReady(s)) return { skipped: "Fill in your return address on the settings page first." };
 
   let since = await env.LABELS.get("orders_since");
@@ -327,9 +327,15 @@ async function printRoute(request, url, env) {
 }
 
 // ---------------------------------------------------------------- settings page
+const WHERE = "Cloudflare &rarr; Workers &amp; Pages &rarr; this Worker &rarr; Settings &rarr; Variables and Secrets";
+const examplePassword = (p) => !p || p === "choose-a-password" || p.length < 8;
+const exampleKey = (k) => !!k && /x{6}/i.test(k);
+
 async function adminRoute(request, url, env) {
-  if (!env.ADMIN_PASSWORD) return html(page("Almost there", `<p>Add a secret named <b>ADMIN_PASSWORD</b> to this Worker
-    (Cloudflare &rarr; Workers &amp; Pages &rarr; this Worker &rarr; Settings &rarr; Variables and Secrets), then reload this page.</p>`));
+  if (examplePassword(env.ADMIN_PASSWORD)) return html(page("Almost there", `<p>Set your own <b>ADMIN_PASSWORD</b> secret
+    (at least 8 characters, not the example one) in ${WHERE}, then reload this page.</p>`));
+  if (exampleKey(env.SHIPPO_API_KEY)) return html(page("Almost there", `<p>The <b>SHIPPO_API_KEY</b> secret is still the example value.
+    Replace it with your real Shippo token in ${WHERE}, then reload this page.</p>`));
   const auth = request.headers.get("authorization") || "";
   let pass = "";
   try { pass = auth.startsWith("Basic ") ? atob(auth.slice(6)).split(":").slice(1).join(":") : ""; } catch {}

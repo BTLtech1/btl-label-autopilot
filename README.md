@@ -43,7 +43,7 @@ Click the button. Cloudflare asks you to sign in (or make a free account) and to
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/BTLtech1/btl-label-autopilot)
 
-It asks for two things:
+Tick **Create private Git repository**. Then it asks for two things, filled in with example values. **Replace both:**
 
 - **SHIPPO_API_KEY**: paste your Live Shippo token.
 - **ADMIN_PASSWORD**: make up a password for your settings page.

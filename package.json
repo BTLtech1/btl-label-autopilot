@@ -14,10 +14,10 @@
   "cloudflare": {
     "bindings": {
       "SHIPPO_API_KEY": {
-        "description": "Your **live** Shippo API token. In Shippo, open the API page (Settings → API, or the Shippo developer portal) and make a **Live** token. It starts with `shippo_live_`. Labels are charged to your Shippo account."
+        "description": "**Replace the example** with your **live** Shippo API token. In Shippo, open the API page (Settings → API, or the Shippo developer portal) and make a **Live** token. It starts with `shippo_live_`. Labels are charged to your Shippo account."
       },
       "ADMIN_PASSWORD": {
-        "description": "Make up a password for your settings page. You'll type it when you open the page (any username works)."
+        "description": "**Replace the example** with your own password for the settings page (8+ characters). You'll type it when you open the page (any username works)."
       },
       "LABELS": {
         "description": "Storage for your settings and the print queue. Leave as is."
