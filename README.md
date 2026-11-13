@@ -2,7 +2,7 @@
 
 Make a sale, and the shipping label prints by itself, with what to pack written on it in big letters.
 
-Works with Etsy, eBay, Shopify, WooCommerce, Amazon and the other stores [Shippo](https://goshippo.com) connects to, plus your own Stripe checkout. It's free to run: it lives on a free Cloudflare account, and Shippo's free plan includes 30 labels a month (then 7¢ a label, plus postage, as of November 2026).
+Works with Etsy, eBay, Shopify, WooCommerce, Amazon and the other stores [Shippo](https://goshippo.com) connects to, plus your own Stripe checkout. The only thing you buy is the bridge board (about $6 to $10, once). The rest is free: it runs on a free Cloudflare account, and Shippo's free plan includes 30 labels a month (then 7¢ a label, plus postage, as of November 2026).
 
 You need:
 
