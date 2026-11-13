@@ -1,0 +1,27 @@
+# Get the newest BTL Label Autopilot: Actions tab -> "Update from BTL" -> Run workflow.
+# It copies the latest code into your copy; Cloudflare then redeploys it by itself.
+# Your settings, address and print queue live in Cloudflare and are not touched.
+name: Update from BTL
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    if: github.repository != 'BTLtech1/btl-label-autopilot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy the latest code
+        run: |
+          git clone --depth 1 https://github.com/BTLtech1/btl-label-autopilot /tmp/upstream
+          # Keep this copy's own Worker name (set when you clicked Deploy).
+          name=$(grep -o '"name": *"[^"]*"' wrangler.jsonc | head -1)
+          cp -r /tmp/upstream/src /tmp/upstream/README.md /tmp/upstream/AGENTS.md /tmp/upstream/LICENSE .
+          cp /tmp/upstream/.github/workflows/update.yml .github/workflows/update.yml
+          cp /tmp/upstream/wrangler.jsonc wrangler.jsonc
+          sed -i "0,/\"name\": *\"[^\"]*\"/s//$name/" wrangler.jsonc
+          git config user.name "BTL Label Autopilot updater"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "Already up to date."; else git commit -m "Update from BTL Label Autopilot" && git push; fi

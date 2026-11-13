@@ -84,12 +84,12 @@ Website orders print within seconds, tagged `ST`. If a label can't be bought (ov
 
 ## Updating
 
-The Deploy button made your own copy of this code in your GitHub. To get new versions:
+The Deploy button made your own copy of this code in your GitHub. To get the newest version:
 
-1. Open your copy on GitHub.
-2. If it shows **Sync fork**, click it, then **Update branch**. If it doesn't, open this page, copy `src/index.js`, and paste it over the same file in your copy (pencil icon → paste → **Commit changes**).
+1. Open your copy on GitHub and click the **Actions** tab. (The first time, GitHub may ask you to click **I understand my workflows, go ahead and enable them**.)
+2. Click **Update from BTL** on the left, then **Run workflow** → **Run workflow**.
 
-Cloudflare redeploys it by itself within a minute. Your settings, address and print queue are kept.
+About a minute later Cloudflare redeploys it by itself. Your settings, address and print queue are kept.
 
 ## Problems
 
