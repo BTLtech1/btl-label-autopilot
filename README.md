@@ -76,6 +76,10 @@ Click **Print a free test label** on the settings page. It should print within a
 
 `2x G3, SD / ET` means: two G3s and one SD, from Etsy. Store tags (ET, EB, SH, AZ, WC, ST) can be changed or switched off on the settings page.
 
+## More than one printer
+
+Pack different products in different spots? Add up to 4 printers on the settings page (each needs its own bridge), then pick a printer for each item code. Each printer gets its own Queue token. Orders with items for different printers go to the printer you choose.
+
 ## Your own website (Stripe, optional)
 
 If you sell through your own Stripe Checkout:

@@ -18,7 +18,7 @@
 //
 // https://github.com/BTLtech1/btl-label-autopilot   Made by BTL.
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 const DAY = 60 * 60 * 24;
 const KEEP_ORDERS = DAY * 60;   // how long "already handled" markers are kept
 const KEEP_JOBS = DAY * 14;     // printed or not, labels leave the queue after this
@@ -30,6 +30,8 @@ const DEFAULTS = {
   capCents: 800,
   carriers: "usps",                   // "usps" or "any"
   packages: [{ name: "6x9 bubble mailer", length: 9, width: 6, height: 1 }],
+  printers: [{ id: "main", name: "Label printer" }],   // each has its own bridge and queue token
+  mixedPrinter: "main",               // orders whose items belong to different printers
   defaultOz: 4,
   from: { name: "", street1: "", street2: "", city: "", state: "", zip: "", email: "", phone: "" },
   stores: "",                         // blank = every store connected in Shippo
@@ -61,15 +63,19 @@ async function getSettings(env) {
   const s = (await env.LABELS.get("settings", "json")) || {};
   return {
     ...DEFAULTS, ...s,
+    printers: s.printers?.length ? s.printers : DEFAULTS.printers,
     packages: s.packages?.length ? s.packages : s.parcel ? [{ name: "Package", ...s.parcel }] : DEFAULTS.packages,
     from: { ...DEFAULTS.from, ...(s.from || {}) },
     siteTags: { ...DEFAULTS.siteTags, ...(s.siteTags || {}) },
   };
 }
 
-async function printToken(env) {
-  let t = await env.LABELS.get("print_token");
-  if (!t) { t = randomToken(); await env.LABELS.put("print_token", t); }
+// KV keys per printer: the first printer ("main") keeps the original names.
+const pk = (base, id) => (!id || id === "main" ? base : `${base}:${id}`);
+
+async function printToken(env, id = "main") {
+  let t = await env.LABELS.get(pk("print_token", id));
+  if (!t) { t = randomToken(); await env.LABELS.put(pk("print_token", id), t); }
   return t;
 }
 
@@ -105,6 +111,14 @@ function packageFor(lines, s) {
     if (p.length * p.width * p.height > best.length * best.width * best.height) best = p;
   }
   return best;
+}
+
+// The printer for an order: the one its items belong to, or the "mixed orders" printer.
+function printerFor(lines, s) {
+  const ids = new Set(s.printers.map((p) => p.id));
+  const want = new Set(lines.map((li) => { const r = ruleFor(li.title, s.rules); return r && ids.has(r.prn) ? r.prn : s.printers[0].id; }));
+  if (want.size === 1) return [...want][0];
+  return ids.has(s.mixedPrinter) ? s.mixedPrinter : s.printers[0].id;
 }
 
 function ouncesFor(lines, rules, fallbackOz) {
@@ -152,7 +166,7 @@ function shippoError(data) {
 }
 
 // Rates the parcel, buys the cheapest allowed label, downloads the picture and queues it.
-async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWords, capCents, pkg }) {
+async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWords, capCents, pkg, printer }) {
   const box = pkg || s.packages[0];
   const from = { ...s.from, country: "US" };
   const shipment = await shippo("/shipments/", key, {
@@ -183,7 +197,7 @@ async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWord
   }
   const img = await fetch(tx.data.label_url);
   if (!img.ok) return { ok: false, reason: "label bought, but it couldn't be downloaded; print it from Shippo", tracking: tx.data.tracking_number };
-  await queueJob(env, await img.arrayBuffer(), labelWords);
+  await queueJob(env, await img.arrayBuffer(), labelWords, printer || s.printers[0].id);
   return { ok: true, tracking: tx.data.tracking_number, cost: rate.amount, service: `${rate.provider} ${rate.servicelevel?.name || ""}`.trim() };
 }
 
@@ -221,7 +235,7 @@ async function checkOrders(env) {
     const ref = `${app || "Order"} ${o.order_number || o.object_id.slice(-8)}`;
 
     const r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
-      addressTo: o.to_address?.object_id || o.to_address, oz, orderId: o.object_id, ref, labelWords: labelText(codes, tag), pkg: packageFor(lines, s),
+      addressTo: o.to_address?.object_id || o.to_address, oz, orderId: o.object_id, ref, labelWords: labelText(codes, tag), pkg: packageFor(lines, s), printer: printerFor(lines, s),
     });
     await env.LABELS.put(doneKey, JSON.stringify(r), { expirationTtl: KEEP_ORDERS });
     const entry = { at: new Date().toISOString(), order: ref, codes, ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) };
@@ -260,7 +274,7 @@ async function stripeHook(request, env) {
   if (s.autoBuy && env.SHIPPO_API_KEY && fromReady(s)) {
     await env.LABELS.put(doneKey, "buying", { expirationTtl: KEEP_ORDERS });
     r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
-      addressTo, oz: ouncesFor(lines, s.rules, s.defaultOz), ref, pkg: packageFor(lines, s),
+      addressTo, oz: ouncesFor(lines, s.rules, s.defaultOz), ref, pkg: packageFor(lines, s), printer: printerFor(lines, s),
       labelWords: labelText(codes, s.showSite ? s.siteTags.Stripe : ""),
     });
   }
@@ -298,19 +312,19 @@ function same(a, b) {
 
 // ---------------------------------------------------------------- print queue (the mailbox)
 // The bridge asks GET /print/next every few seconds and confirms with POST /print/ack?id=...
-async function queueJob(env, body, words) {
+async function queueJob(env, body, words, printer = "main") {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await env.LABELS.put(`job:${id}`, body, { expirationTtl: KEEP_JOBS, metadata: { text: words || "" } });
-  const q = (await env.LABELS.get("queue", "json")) || [];
+  const q = (await env.LABELS.get(pk("queue", printer), "json")) || [];
   const keep = [];
   for (const j of q) if (!(await env.LABELS.get(`done:${j}`))) keep.push(j);
   keep.push(id);
-  await env.LABELS.put("queue", JSON.stringify(keep.slice(-200)));
+  await env.LABELS.put(pk("queue", printer), JSON.stringify(keep.slice(-200)));
   return id;
 }
 
-async function waitingCount(env) {
-  const q = (await env.LABELS.get("queue", "json")) || [];
+async function waitingCount(env, printer = "main") {
+  const q = (await env.LABELS.get(pk("queue", printer), "json")) || [];
   let n = 0;
   for (const id of q) if (!(await env.LABELS.get(`done:${id}`))) n++;
   return n;
@@ -324,21 +338,25 @@ async function logEntry(env, entry) {
 
 // The bridge sends its own page address (http://192.168.x.x/) so the settings page can link to it.
 // Saved only when it changes, or every 10 minutes for "last checked", to stay far inside KV's free write limit.
-async function rememberBridge(env, page) {
+async function rememberBridge(env, page, printer = "main") {
   if (!page || !/^http:\/\/[0-9a-z.\-]+\/$/i.test(page)) return;
-  const old = await env.LABELS.get("bridge", "json");
+  const old = await env.LABELS.get(pk("bridge", printer), "json");
   if (old && old.page === page && Date.now() - old.seen < 10 * 60 * 1000) return;
-  await env.LABELS.put("bridge", JSON.stringify({ page, seen: Date.now() }));
+  await env.LABELS.put(pk("bridge", printer), JSON.stringify({ page, seen: Date.now() }));
 }
 
 async function printRoute(request, url, env) {
   const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "") || url.searchParams.get("token") || "";
-  if (!token || !same(token, await printToken(env))) return text("Unauthorized", 401);
+  if (!token) return text("Unauthorized", 401);
+  // Each printer has its own token, so the token says which printer is asking.
+  let printer = null;
+  for (const p of (await getSettings(env)).printers) if (same(token, await printToken(env, p.id))) { printer = p.id; break; }
+  if (!printer) return text("Unauthorized", 401);
 
   if (url.pathname === "/print/next") {
-    await rememberBridge(env, request.headers.get("x-bridge-page"));
+    await rememberBridge(env, request.headers.get("x-bridge-page"), printer);
     const takesPng = /image\/png/i.test(request.headers.get("x-bridge-accepts") || "");
-    const q = (await env.LABELS.get("queue", "json")) || [];
+    const q = (await env.LABELS.get(pk("queue", printer), "json")) || [];
     for (const id of q) {
       if (await env.LABELS.get(`done:${id}`)) continue;
       const { value, metadata } = await env.LABELS.getWithMetadata(`job:${id}`, { type: "arrayBuffer" });
@@ -357,6 +375,7 @@ async function printRoute(request, url, env) {
 }
 
 // ---------------------------------------------------------------- settings page
+const SETUP = "https://btltech1.github.io/esp32-label-printer-bridge/";
 const WHERE = "Cloudflare &rarr; Workers &amp; Pages &rarr; this Worker &rarr; Settings &rarr; Variables and Secrets";
 const examplePassword = (p) => !p || p === "choose-a-password" || p.length < 8;
 const exampleKey = (k) => !!k && /x{6}/i.test(k);
@@ -391,27 +410,36 @@ async function adminRoute(request, url, env) {
   }
   if (request.method === "POST" && url.pathname === "/admin/test") {
     const s = await getSettings(env);
+    const f = await request.formData().catch(() => new FormData());
+    const printer = s.printers.find((p) => p.id === f.get("printer"))?.id || s.printers[0].id;
     if (!s.testKey) return back("Paste your Shippo TEST key (starts with shippo_test_) in the settings first.");
     if (!fromReady(s)) return back("Fill in your return address first.");
     const r = await buyAndQueue(env, s, s.testKey, {
       addressTo: { ...s.from, country: "US" }, oz: s.defaultOz, ref: "Test label",
-      labelWords: labelText((s.rules[0]?.code ? `2x ${s.rules[0].code}` : "2x AB, CD"), "TEST"), capCents: 1e7,
+      labelWords: labelText((s.rules[0]?.code ? `2x ${s.rules[0].code}` : "2x AB, CD"), "TEST"), capCents: 1e7, printer,
     });
     await logEntry(env, { at: new Date().toISOString(), order: "Test label (free)", ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) });
     return back(r.ok ? "Test label sent to the printer. It should print within a few seconds." : `Test failed: ${r.reason}`);
   }
   if (request.method === "POST" && url.pathname === "/admin/newtoken") {
-    await env.LABELS.put("print_token", randomToken());
+    const f = await request.formData().catch(() => new FormData());
+    const s = await getSettings(env);
+    const id = s.printers.find((p) => p.id === f.get("printer"))?.id || "main";
+    await env.LABELS.put(pk("print_token", id), randomToken());
     return back("Made a new mailbox key. Copy it into your bridge's Queue token.");
   }
   if (url.pathname !== "/admin") return text("Not found", 404);
 
   const s = await getSettings(env);
+  const printers = [];
+  for (const p of s.printers) {
+    printers.push({ ...p, token: await printToken(env, p.id), waiting: await waitingCount(env, p.id), bridge: await env.LABELS.get(pk("bridge", p.id), "json") });
+  }
   return html(page("Label Autopilot", settingsHtml(s, {
-    latest: await latestVersion(),
-    origin: url.origin, token: await printToken(env), msg: url.searchParams.get("msg") || "",
-    waiting: await waitingCount(env), log: (await env.LABELS.get("log", "json")) || [],
-    since: await env.LABELS.get("orders_since"), hasKey: !!env.SHIPPO_API_KEY, bridge: await env.LABELS.get("bridge", "json"),
+    latest: await latestVersion(), printers,
+    origin: url.origin, msg: url.searchParams.get("msg") || "",
+    waiting: printers.reduce((n, p) => n + p.waiting, 0), log: (await env.LABELS.get("log", "json")) || [],
+    since: await env.LABELS.get("orders_since"), hasKey: !!env.SHIPPO_API_KEY,
     stripe: !!(env.STRIPE_WEBHOOK_SECRET && env.STRIPE_API_KEY),
   })));
 }
@@ -424,6 +452,18 @@ async function latestVersion() {
   } catch { return ""; }
 }
 const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+
+function readPrinters(g, old) {
+  const out = [];
+  for (const p of old.printers) {
+    const name = g(`pn_${p.id}`);
+    if (p.id === "main") out.push({ id: "main", name: name || p.name });
+    else if (name) out.push({ id: p.id, name });                     // blank name removes that printer
+  }
+  const add = g("pn_new");
+  if (add && out.length < 4) out.push({ id: "p" + Math.random().toString(36).slice(2, 7), name: add });
+  return out;
+}
 
 function readPackages(g, num, old) {
   const out = [];
@@ -440,7 +480,7 @@ function readForm(f, old) {
   const rules = [];
   for (let i = 0; i < 40; i++) {
     const match = g(`r${i}m`), code = g(`r${i}c`).toUpperCase().replace(/[^\x20-\x7e]/g, "").slice(0, 12);
-    if (match && code) rules.push({ match, code, oz: num(`r${i}o`, 0), pkg: Math.max(0, parseInt(g(`r${i}p`) || "0", 10) || 0) });
+    if (match && code) rules.push({ match, code, oz: num(`r${i}o`, 0), pkg: Math.max(0, parseInt(g(`r${i}p`) || "0", 10) || 0), prn: g(`r${i}x`) || "main" });
   }
   const siteTags = { ...old.siteTags };
   for (const k of Object.keys(DEFAULTS.siteTags)) { const v = g(`tag_${k}`).toUpperCase().slice(0, 4); if (v) siteTags[k] = v; }
@@ -455,6 +495,8 @@ function readForm(f, old) {
     capCents: Math.round(num("cap", old.capCents / 100) * 100),
     carriers: g("carriers") === "any" ? "any" : "usps",
     packages: readPackages(g, num, old),
+    printers: readPrinters(g, old),
+    mixedPrinter: g("mixedPrinter") || "main",
     defaultOz: num("defaultOz", old.defaultOz),
     from: { name: g("fname"), street1: g("fstreet1"), street2: g("fstreet2"), city: g("fcity"), state: g("fstate").toUpperCase(),
             zip: g("fzip"), email: g("femail"), phone: g("fphone") },
@@ -471,12 +513,27 @@ const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 function settingsHtml(s, x) {
+  const multi = s.printers.length > 1;
   const field = (name, label, value, attrs = "") => `<label>${label}<input name="${name}" value="${esc(value)}" ${attrs}></label>`;
   const rows = [...s.rules, ...Array(Math.max(3, 8 - s.rules.length)).fill({ match: "", code: "", oz: "" })].map((r, i) => `
     <tr><td><input name="r${i}m" value="${esc(r.match)}" placeholder="e.g. gen 3"></td>
         <td><input name="r${i}c" value="${esc(r.code)}" placeholder="G3" class="code"></td>
         <td><input name="r${i}o" value="${esc(r.oz || "")}" placeholder="2" class="oz" inputmode="decimal"></td>
-        <td><select name="r${i}p">${s.packages.map((p, j) => `<option value="${j}" ${(r.pkg || 0) === j ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></td></tr>`).join("");
+        <td><select name="r${i}p">${s.packages.map((p, j) => `<option value="${j}" ${(r.pkg || 0) === j ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></td>
+        ${multi ? `<td><select name="r${i}x">${s.printers.map((p) => `<option value="${p.id}" ${(r.prn || "main") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></td>` : ""}</tr>`).join("");
+  const printerOpts = (sel) => s.printers.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  const bridges = x.printers.map((p, i) => `
+    <div class="printer">
+      ${multi ? `<h3>${esc(p.name)}</h3>` : ""}
+      <p>On ${p.bridge ? `<a href="${esc(p.bridge.page)}" target="_blank" rel="noopener">this printer's BTL Print Bridge page</a>` : `this printer's <a href="${SETUP}" target="_blank" rel="noopener">BTL Print Bridge</a> page`}, open <b>Settings</b> and paste these two into <b>Queue URL</b> and <b>Queue token</b>:</p>
+      ${p.bridge ? `<p class="muted">Its bridge last checked in ${esc(ago(p.bridge.seen))}. Waiting to print here: <b>${p.waiting}</b>. The bridge page only opens on the same Wi-Fi.</p>`
+        : `<p class="muted">No bridge has checked in yet. Don't have one? <a href="${SETUP}" target="_blank" rel="noopener">Set one up</a> on a $6 to $10 ESP32-S3 board.</p>`}
+      <div class="copy"><code id="qurl${i}">${esc(x.origin)}/print</code><button type="button" onclick="cp('qurl${i}',this)">Copy</button></div>
+      <div class="copy"><code id="qtok${i}">${esc(p.token)}</code><button type="button" onclick="cp('qtok${i}',this)">Copy</button></div>
+      <form method="post" action="/admin/newtoken" onsubmit="return confirm('Make a new key? This printer stops until you paste the new one into its bridge.')"><input type="hidden" name="printer" value="${p.id}"><button class="link">Make a new key</button></form>
+    </div>`).join("");
+  const printerRows = s.printers.map((p, i) => `<tr><td><input name="pn_${p.id}" value="${esc(p.name)}" ${i ? 'placeholder="(blank removes it)"' : ""}></td></tr>`).join("")
+    + (s.printers.length < 4 ? `<tr><td><input name="pn_new" placeholder="Add a printer, e.g. Keychain station"></td></tr>` : "");
   const pkgRows = [...s.packages, ...Array(Math.max(0, 4 - s.packages.length)).fill({ name: "", length: "", width: "", height: "" })].map((p, i) => `
     <tr><td><input name="p${i}n" value="${esc(p.name)}" placeholder="${i ? "e.g. Small box" : "6x9 bubble mailer"}"></td>
         <td><input name="p${i}l" value="${esc(p.length)}" class="oz" inputmode="decimal"></td>
@@ -502,19 +559,15 @@ function settingsHtml(s, x) {
     ${missing.length ? `<p class="held">Still needed: ${missing.join(", ")}.</p>` : ""}
     <p>Waiting to print: <b>${x.waiting}</b>${x.since ? ` &middot; Handling orders placed after ${esc(new Date(x.since).toLocaleString("en-US"))}` : ""}</p>
     <div class="row">
-      <form method="post" action="/admin/test"><button>Print a free test label</button></form>
+      <form method="post" action="/admin/test">${multi ? `<select name="printer" style="display:inline-block;width:auto;margin:0 6px 0 0">${printerOpts("main")}</select>` : ""}<button>Print a free test label</button></form>
       <form method="post" action="/admin/check"><button>Check for new orders now</button></form>
     </div>
     <p class="muted">New orders are checked every 15 minutes by themselves.</p>
   </section>
 
   <section>
-    <h2>Your bridge</h2>
-    <p>On your ${x.bridge ? `<a href="${esc(x.bridge.page)}" target="_blank" rel="noopener">BTL Print Bridge's page</a>` : `<a href="https://btltech1.github.io/esp32-label-printer-bridge/" target="_blank" rel="noopener">BTL Print Bridge</a>'s page`}, open <b>Settings</b> and paste these two into <b>Queue URL</b> and <b>Queue token</b>:</p>
-    ${x.bridge ? `<p class="muted">Your bridge last checked in ${esc(ago(x.bridge.seen))}. Its page only opens on the same Wi-Fi.</p>` : `<p class="muted">No bridge has checked in yet. Don't have one? <a href="https://btltech1.github.io/esp32-label-printer-bridge/" target="_blank" rel="noopener">Set one up</a> on a $6 to $10 ESP32-S3 board.</p>`}
-    <div class="copy"><code id="qurl">${esc(x.origin)}/print</code><button type="button" onclick="cp('qurl',this)">Copy</button></div>
-    <div class="copy"><code id="qtok">${esc(x.token)}</code><button type="button" onclick="cp('qtok',this)">Copy</button></div>
-    <form method="post" action="/admin/newtoken" onsubmit="return confirm('Make a new key? The bridge stops printing until you paste the new one in.')"><button class="link">Make a new key</button></form>
+    <h2>${multi ? "Your printers" : "Your bridge"}</h2>
+    ${bridges}
   </section>
 
   <form method="post" action="/admin/save">
@@ -532,6 +585,10 @@ function settingsHtml(s, x) {
     <p class="muted">The first one is used unless an item code below says otherwise. An order with several items goes in the biggest package any of them needs. A 6 x 9 bubble mailer is 9 x 6 x 1.</p>
     ${field("defaultOz", "Usual weight (oz)", s.defaultOz, 'inputmode="decimal"')}
     <p class="muted">Used when an item has no weight below.</p>
+    <h3>Printers</h3>
+    <p class="muted">One BTL Print Bridge per printer. Add a printer to send some products' labels to a different spot, like a packing station for each product.</p>
+    <table class="rules">${printerRows}</table>
+    ${multi ? `<label>Orders with items for different printers go to<select name="mixedPrinter">${printerOpts(s.mixedPrinter)}</select></label>` : ""}
     ${field("stores", "Only these stores (leave blank for every store connected in Shippo)", s.stores, 'placeholder="e.g. Etsy, eBay"')}
   </section>
 
@@ -550,7 +607,7 @@ function settingsHtml(s, x) {
     <h2>Item codes</h2>
     <p>Short codes printed big on the label, so you know what to pack. If an item's title contains the words, it gets the code.
        Use <code>|</code> for "or" (<code>gen 1|gen 2</code>). The first match wins, so put the more specific ones on top.</p>
-    <table class="rules"><tr><th>Title contains</th><th>Code</th><th>Packed oz</th><th>Package</th></tr>${rows}</table>
+    <table class="rules"><tr><th>Title contains</th><th>Code</th><th>Packed oz</th><th>Package</th>${multi ? "<th>Printer</th>" : ""}</tr>${rows}</table>
     <p class="muted">Save to get more empty rows. Items with no match get the first two words of their title. Add a package above to choose it here.</p>
     <label class="check"><input type="checkbox" name="showSite" ${s.showSite ? "checked" : ""}> Also print where the order came from</label>
     <div class="tags">${tags}</div>
@@ -597,7 +654,7 @@ button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--li
 button.link{border:0;background:none;color:var(--mute);text-decoration:underline;padding:4px 0}.row{display:flex;gap:10px;flex-wrap:wrap}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}.rules input{margin:0}.rules .code{max-width:90px}.rules .oz{max-width:80px}
 .copy{display:flex;gap:8px;align-items:center;margin:6px 0}.copy code{flex:1;overflow-wrap:anywhere;background:var(--bg);padding:8px 10px;border-radius:8px;border:1px solid var(--line)}
-.tags{display:flex;gap:10px;flex-wrap:wrap}.tag{width:110px}.muted{color:var(--mute);font-size:14px}.held{color:var(--warn)}.big{font-size:18px;font-weight:600}
+.printer+.printer{border-top:1px solid var(--line);margin-top:14px;padding-top:6px}.tags{display:flex;gap:10px;flex-wrap:wrap}.tag{width:110px}.muted{color:var(--mute);font-size:14px}.held{color:var(--warn)}.big{font-size:18px;font-weight:600}
 .msg{background:var(--accent);color:#fff;padding:10px 14px;border-radius:10px}.savebar{position:sticky;bottom:10px;text-align:right}
 code{font-size:13px}small{color:var(--mute)}a{color:var(--accent)}
 </style></head><body><main><h1>${esc(title)}</h1><p class="muted">BTL Label Autopilot ${VERSION} &middot; <a href="https://github.com/BTLtech1/btl-label-autopilot" style="color:inherit">help</a></p>${body}</main></body></html>`;
