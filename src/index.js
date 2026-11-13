@@ -18,7 +18,7 @@
 //
 // https://github.com/BTLtech1/btl-label-autopilot   Made by BTL.
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const DAY = 60 * 60 * 24;
 const KEEP_ORDERS = DAY * 60;   // how long "already handled" markers are kept
 const KEEP_JOBS = DAY * 14;     // printed or not, labels leave the queue after this
@@ -322,11 +322,21 @@ async function logEntry(env, entry) {
   await env.LABELS.put("log", JSON.stringify(log.slice(0, 30)));
 }
 
+// The bridge sends its own page address (http://192.168.x.x/) so the settings page can link to it.
+// Saved only when it changes, or every 10 minutes for "last checked", to stay far inside KV's free write limit.
+async function rememberBridge(env, page) {
+  if (!page || !/^http:\/\/[0-9a-z.\-]+\/$/i.test(page)) return;
+  const old = await env.LABELS.get("bridge", "json");
+  if (old && old.page === page && Date.now() - old.seen < 10 * 60 * 1000) return;
+  await env.LABELS.put("bridge", JSON.stringify({ page, seen: Date.now() }));
+}
+
 async function printRoute(request, url, env) {
   const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "") || url.searchParams.get("token") || "";
   if (!token || !same(token, await printToken(env))) return text("Unauthorized", 401);
 
   if (url.pathname === "/print/next") {
+    await rememberBridge(env, request.headers.get("x-bridge-page"));
     const takesPng = /image\/png/i.test(request.headers.get("x-bridge-accepts") || "");
     const q = (await env.LABELS.get("queue", "json")) || [];
     for (const id of q) {
@@ -401,7 +411,7 @@ async function adminRoute(request, url, env) {
     latest: await latestVersion(),
     origin: url.origin, token: await printToken(env), msg: url.searchParams.get("msg") || "",
     waiting: await waitingCount(env), log: (await env.LABELS.get("log", "json")) || [],
-    since: await env.LABELS.get("orders_since"), hasKey: !!env.SHIPPO_API_KEY,
+    since: await env.LABELS.get("orders_since"), hasKey: !!env.SHIPPO_API_KEY, bridge: await env.LABELS.get("bridge", "json"),
     stripe: !!(env.STRIPE_WEBHOOK_SECRET && env.STRIPE_API_KEY),
   })));
 }
@@ -457,6 +467,7 @@ function readForm(f, old) {
   };
 }
 
+const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 function settingsHtml(s, x) {
@@ -499,7 +510,8 @@ function settingsHtml(s, x) {
 
   <section>
     <h2>Your bridge</h2>
-    <p>On your BTL Print Bridge's page, open <b>Settings</b> and paste these two into <b>Queue URL</b> and <b>Queue token</b>:</p>
+    <p>On your ${x.bridge ? `<a href="${esc(x.bridge.page)}" target="_blank" rel="noopener">BTL Print Bridge's page</a>` : `<a href="https://btltech1.github.io/esp32-label-printer-bridge/" target="_blank" rel="noopener">BTL Print Bridge</a>'s page`}, open <b>Settings</b> and paste these two into <b>Queue URL</b> and <b>Queue token</b>:</p>
+    ${x.bridge ? `<p class="muted">Your bridge last checked in ${esc(ago(x.bridge.seen))}. Its page only opens on the same Wi-Fi.</p>` : `<p class="muted">No bridge has checked in yet. Don't have one? <a href="https://btltech1.github.io/esp32-label-printer-bridge/" target="_blank" rel="noopener">Set one up</a> on a $6 to $10 ESP32-S3 board.</p>`}
     <div class="copy"><code id="qurl">${esc(x.origin)}/print</code><button type="button" onclick="cp('qurl',this)">Copy</button></div>
     <div class="copy"><code id="qtok">${esc(x.token)}</code><button type="button" onclick="cp('qtok',this)">Copy</button></div>
     <form method="post" action="/admin/newtoken" onsubmit="return confirm('Make a new key? The bridge stops printing until you paste the new one in.')"><button class="link">Make a new key</button></form>
@@ -587,7 +599,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 .copy{display:flex;gap:8px;align-items:center;margin:6px 0}.copy code{flex:1;overflow-wrap:anywhere;background:var(--bg);padding:8px 10px;border-radius:8px;border:1px solid var(--line)}
 .tags{display:flex;gap:10px;flex-wrap:wrap}.tag{width:110px}.muted{color:var(--mute);font-size:14px}.held{color:var(--warn)}.big{font-size:18px;font-weight:600}
 .msg{background:var(--accent);color:#fff;padding:10px 14px;border-radius:10px}.savebar{position:sticky;bottom:10px;text-align:right}
-code{font-size:13px}small{color:var(--mute)}
+code{font-size:13px}small{color:var(--mute)}a{color:var(--accent)}
 </style></head><body><main><h1>${esc(title)}</h1><p class="muted">BTL Label Autopilot ${VERSION} &middot; <a href="https://github.com/BTLtech1/btl-label-autopilot" style="color:inherit">help</a></p>${body}</main></body></html>`;
 }
 
