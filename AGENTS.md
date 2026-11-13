@@ -19,7 +19,8 @@ You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Wo
 
 ## Files
 
-- `src/index.js`: the whole Worker (no dependencies).
+- `src/index.js`: the whole Worker (no dependencies). Bump `VERSION` there and in `version.json` together; the settings page compares them to show "update available".
+- No `.github/workflows`: the Deploy button can't copy workflow files into people's repos, and the whole template upload fails if one is present.
 - `wrangler.jsonc`: name, KV binding `LABELS`, cron.
 - `.dev.vars.example` and `package.json` → `cloudflare.bindings`: what the Deploy button asks for.
 

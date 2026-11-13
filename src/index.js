@@ -398,12 +398,22 @@ async function adminRoute(request, url, env) {
 
   const s = await getSettings(env);
   return html(page("Label Autopilot", settingsHtml(s, {
+    latest: await latestVersion(),
     origin: url.origin, token: await printToken(env), msg: url.searchParams.get("msg") || "",
     waiting: await waitingCount(env), log: (await env.LABELS.get("log", "json")) || [],
     since: await env.LABELS.get("orders_since"), hasKey: !!env.SHIPPO_API_KEY,
     stripe: !!(env.STRIPE_WEBHOOK_SECRET && env.STRIPE_API_KEY),
   })));
 }
+
+// Newest version number published on GitHub (cached by Cloudflare for a day).
+async function latestVersion() {
+  try {
+    const r = await fetch("https://raw.githubusercontent.com/BTLtech1/btl-label-autopilot/main/version.json", { cf: { cacheTtl: 86400 } });
+    return r.ok ? String((await r.json()).version || "") : "";
+  } catch { return ""; }
+}
+const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
 
 function readPackages(g, num, old) {
   const out = [];
@@ -474,6 +484,7 @@ function settingsHtml(s, x) {
 
   return `
   ${x.msg ? `<p class="msg">${esc(x.msg)}</p>` : ""}
+  ${x.latest && newer(x.latest, VERSION) ? `<p class="msg">Version ${esc(x.latest)} is available (you have ${VERSION}). <a href="https://github.com/BTLtech1/btl-label-autopilot#updating" style="color:inherit">How to update</a></p>` : ""}
   <section>
     <h2>Status</h2>
     <p class="big">${s.autoBuy && !missing.length ? "&#9679; On: labels are bought and printed by themselves." : "&#9675; Off: nothing is bought."}</p>
