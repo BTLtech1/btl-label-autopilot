@@ -416,10 +416,10 @@ async function adminRoute(request, url, env) {
   })));
 }
 
-// Newest version number published on GitHub (cached by Cloudflare for a day).
+// Newest version number published on GitHub (cached by Cloudflare for an hour).
 async function latestVersion() {
   try {
-    const r = await fetch("https://raw.githubusercontent.com/BTLtech1/btl-label-autopilot/main/version.json", { cf: { cacheTtl: 86400 } });
+    const r = await fetch("https://raw.githubusercontent.com/BTLtech1/btl-label-autopilot/main/version.json", { cf: { cacheTtl: 3600 } });
     return r.ok ? String((await r.json()).version || "") : "";
   } catch { return ""; }
 }
@@ -491,7 +491,7 @@ function settingsHtml(s, x) {
     <td>${esc(e.order)}</td><td>${esc(e.codes || "")}</td>
     <td>${e.held ? `<span class="held">Not bought: ${esc(e.held)}</span>` : `$${esc(e.cost)} ${esc(e.service || "")}<br><small>${esc(e.tracking)}</small>`}</td></tr>`).join("")
     : `<tr><td colspan="4" class="muted">No labels yet.</td></tr>`;
-  const missing = [!x.hasKey && "the SHIPPO_API_KEY secret", !fromReady(s) && "your return address (all fields except line 2)"].filter(Boolean);
+  const missing = [!x.hasKey && "the SHIPPO_API_KEY secret", !fromReady(s) && "your return address (every field except Apt, suite, unit or PMB)"].filter(Boolean);
 
   return `
   ${x.msg ? `<p class="msg">${esc(x.msg)}</p>` : ""}
