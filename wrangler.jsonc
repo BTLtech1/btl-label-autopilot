@@ -7,5 +7,8 @@
   "kv_namespaces": [{ "binding": "LABELS" }],
   // Check Shippo for new paid orders every 15 minutes.
   "triggers": { "crons": ["*/15 * * * *"] },
+  // Your Worker gets a free address ending in .workers.dev; that is where the settings page lives.
+  "workers_dev": true,
+  "preview_urls": false,
   "observability": { "enabled": true }
 }
