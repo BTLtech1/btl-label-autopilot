@@ -8,7 +8,7 @@ You need:
 
 - an **ESP32-S3 board** (a common ~$6 to $10 microcontroller) plugged into your USB label printer, running the free **[BTL Print Bridge](https://github.com/BTLtech1/esp32-label-printer-bridge)** firmware, version **1.9.2 or newer**
 - a **Shippo** account with your stores connected
-- a free **Cloudflare** account
+- a free **Cloudflare** account and a free **GitHub** account
 
 Video walkthrough: coming soon on [BTL's YouTube](https://www.youtube.com/@BTLPhotoTech). Step-by-step guide with pictures: coming soon on [btlstore.com](https://btlstore.com/guides/).
 
@@ -37,9 +37,13 @@ Your computer can be off. Nothing reaches into your home network, so there's no 
 3. Make a **Live** API token on Shippo's API page. It starts with `shippo_live_`. Keep the tab open.
 4. Optional, for free test labels: also copy the **Test** token (`shippo_test_`).
 
-### 2. Cloudflare
+### 2. GitHub
 
-Click the button. Cloudflare asks you to sign in (or make a free account) and to link GitHub.
+Make a free account at [github.com](https://github.com/signup) if you don't have one. Cloudflare keeps your copy of the code there and uses it for one-click updates. You won't need to touch any code.
+
+### 3. Cloudflare
+
+Click the button. Cloudflare asks you to sign in (or make a free account) and to connect your GitHub account.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/BTLtech1/btl-label-autopilot)
 
@@ -50,7 +54,7 @@ Tick **Create private Git repository**. Then it asks for two things:
 
 Click **Deploy**. When it's done, open your new Worker's address (it ends in `.workers.dev`) and add `/admin` to the end. Sign in with your password (any username).
 
-### 3. Settings page
+### 4. Settings page
 
 Fill in:
 
@@ -62,7 +66,7 @@ Fill in:
 
 Tick **Buy and print labels by themselves** and **Save**. Only orders placed after this moment are touched, so old open orders never get surprise labels.
 
-### 4. Bridge
+### 5. Bridge
 
 The settings page shows a **Queue URL** and **Queue token** with Copy buttons. On your bridge's page, open **Settings** and paste them into **Queue URL** and **Queue token**, then save.
 
