@@ -117,6 +117,13 @@ function ouncesFor(lines, rules, fallbackOz) {
   return known && total > 0 ? total : fallbackOz;
 }
 
+// Store tag: built-in ones, then your own (matched ignoring case), else the first two letters.
+function tagFor(app, s) {
+  if (s.siteTags[app]) return s.siteTags[app];
+  const own = (s.customTags || []).find((c) => c.store.toLowerCase() === app.toLowerCase());
+  return own ? own.tag : app.slice(0, 2).toUpperCase();
+}
+
 function labelText(codes, siteTag) {
   return [codes, siteTag].filter(Boolean).join(" / ").replace(/[^\x20-\x7e]/g, "").slice(0, 60);
 }
@@ -210,7 +217,7 @@ async function checkOrders(env) {
     const codes = codesFor(lines, s.rules);
     const orderOz = o.weight && /oz/i.test(o.weight_unit || "") ? Number(o.weight) : o.weight && /lb/i.test(o.weight_unit || "") ? Number(o.weight) * 16 : 0;
     const oz = ouncesFor(lines, s.rules, orderOz > 0 ? orderOz : s.defaultOz);
-    const tag = s.showSite ? (s.siteTags[app] || app.slice(0, 2).toUpperCase()) : "";
+    const tag = s.showSite ? tagFor(app, s) : "";
     const ref = `${app || "Order"} ${o.order_number || o.object_id.slice(-8)}`;
 
     const r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
@@ -417,6 +424,11 @@ function readForm(f, old) {
   }
   const siteTags = { ...old.siteTags };
   for (const k of Object.keys(DEFAULTS.siteTags)) { const v = g(`tag_${k}`).toUpperCase().slice(0, 4); if (v) siteTags[k] = v; }
+  const customTags = [];
+  for (let i = 0; i < 4; i++) {
+    const store = g(`xs${i}`), tag = g(`xt${i}`).toUpperCase().replace(/[^\x20-\x7e]/g, "").slice(0, 4);
+    if (store && tag) customTags.push({ store, tag });
+  }
   const testKey = g("testKey");
   return {
     autoBuy: f.get("autoBuy") === "on",
@@ -430,6 +442,7 @@ function readForm(f, old) {
     rules,
     showSite: f.get("showSite") === "on",
     siteTags,
+    customTags,
     testKey: testKey === "(saved)" ? old.testKey : (testKey.startsWith("shippo_test_") ? testKey : ""),
   };
 }
@@ -450,6 +463,9 @@ function settingsHtml(s, x) {
         <td><input name="p${i}h" value="${esc(p.height)}" class="oz" inputmode="decimal"></td></tr>`).join("");
   const tags = Object.keys(DEFAULTS.siteTags).map((k) => `<label class="tag">${k === "Stripe" ? "Your site (Stripe)" : k}
     <input name="tag_${k}" value="${esc(s.siteTags[k])}" maxlength="4"></label>`).join("");
+  const own = [...(s.customTags || []), ...Array(Math.max(1, 4 - (s.customTags || []).length)).fill({ store: "", tag: "" })].slice(0, 4).map((c, i) => `
+    <tr><td><input name="xs${i}" value="${esc(c.store)}" placeholder="e.g. Bigcommerce"></td>
+        <td><input name="xt${i}" value="${esc(c.tag)}" maxlength="4" placeholder="BC" class="code"></td></tr>`).join("");
   const log = x.log.length ? x.log.slice(0, 12).map((e) => `<tr><td>${esc(new Date(e.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}</td>
     <td>${esc(e.order)}</td><td>${esc(e.codes || "")}</td>
     <td>${e.held ? `<span class="held">Not bought: ${esc(e.held)}</span>` : `$${esc(e.cost)} ${esc(e.service || "")}<br><small>${esc(e.tracking)}</small>`}</td></tr>`).join("")
@@ -515,6 +531,9 @@ function settingsHtml(s, x) {
     <p class="muted">Save to get more empty rows. Items with no match get the first two words of their title. Add a package above to choose it here.</p>
     <label class="check"><input type="checkbox" name="showSite" ${s.showSite ? "checked" : ""}> Also print where the order came from</label>
     <div class="tags">${tags}</div>
+    <h3>Other stores</h3>
+    <table class="rules"><tr><th>Store name (as it shows in Recent labels)</th><th>Tag</th></tr>${own}</table>
+    <p class="muted">Any other store gets the first two letters of its name.</p>
     <p class="muted">Example on the label: <b>2x G3, SD / ET</b></p>
   </section>
 

@@ -25,7 +25,7 @@ You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Wo
 
 ## Settings (KV key `settings`, edited on `/admin`)
 
-`autoBuy`, `capCents`, `carriers` ("usps" | "any"), `packages` [{name, length, width, height in inches}] (first is the default), `defaultOz`, `from` {name, street1, street2, city, state, zip, email, phone}. Shippo requires email and phone. Also `stores` (comma list of Shippo `shop_app` names; blank = all), `rules` [{match, code, oz, pkg}] (pkg = index into packages; an order uses the biggest package its items need) (case-insensitive "contains", `|` = or, first match wins), `showSite`, `siteTags`, `testKey`.
+`autoBuy`, `capCents`, `carriers` ("usps" | "any"), `packages` [{name, length, width, height in inches}] (first is the default), `defaultOz`, `from` {name, street1, street2, city, state, zip, email, phone}. Shippo requires email and phone. Also `stores` (comma list of Shippo `shop_app` names; blank = all), `rules` [{match, code, oz, pkg}] (pkg = index into packages; an order uses the biggest package its items need) (case-insensitive "contains", `|` = or, first match wins), `showSite`, `siteTags`, `customTags` [{store, tag}] (other Shippo stores, matched ignoring case), `testKey`.
 
 ## Common problems
 
