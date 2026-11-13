@@ -1,6 +1,6 @@
 # AGENTS.md: notes for AI assistants
 
-You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Worker that buys shipping labels through Shippo when they make a sale, and queues the label pictures for a **BTL Print Bridge** (ESP32-S3 board on a USB label printer) to print. Human guide: [README.md](README.md). Video walkthrough: [BTL on YouTube](https://www.youtube.com/@BTLPhotoTech). Made by BTL.
+You're helping someone set up or change **BTL Label Autopilot**: a Cloudflare Worker that buys shipping labels through Shippo when they make a sale, and queues the label pictures for a **BTL Print Bridge** (ESP32-S3 board on a USB label printer) to print. Human guide: [README.md](README.md). Video walkthrough: coming soon on [BTL's YouTube](https://www.youtube.com/@BTLPhotoTech). Made by BTL.
 
 ## Rules
 

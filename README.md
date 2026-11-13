@@ -10,7 +10,7 @@ You need:
 - a **Shippo** account with your stores connected
 - a free **Cloudflare** account
 
-Video walkthrough: [BTL on YouTube](https://www.youtube.com/@BTLPhotoTech). Step-by-step guide with pictures: [btlstore.com/guides/auto-print-shipping-labels](https://btlstore.com/guides/auto-print-shipping-labels/).
+Video walkthrough: coming soon on [BTL's YouTube](https://www.youtube.com/@BTLPhotoTech). Step-by-step guide with pictures: coming soon on [btlstore.com](https://btlstore.com/guides/).
 
 ## How it works: a mailbox on the internet
 
