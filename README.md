@@ -2,11 +2,11 @@
 
 Make a sale, and the shipping label prints by itself, with what to pack written on it in big letters.
 
-Works with Etsy, eBay, Shopify, WooCommerce, Amazon and the other stores [Shippo](https://goshippo.com) connects to, plus your own Stripe checkout. The only thing you buy is the bridge board (about $6 to $10, once). The rest is free: it runs on a free Cloudflare account, and Shippo's free plan includes 30 labels a month (then 7¢ a label, plus postage, as of November 2026).
+Works with Etsy, eBay, Shopify, WooCommerce, Amazon and the other stores [Shippo](https://goshippo.com) connects to, plus your own Stripe checkout. The only thing you buy is an ESP32-S3 board, a common microcontroller (about $6 to $10, once). The rest is free: it runs on a free Cloudflare account, and Shippo's free plan includes 30 labels a month (then 7¢ a label, plus postage, as of November 2026).
 
 You need:
 
-- a **[BTL Print Bridge](https://github.com/BTLtech1/esp32-label-printer-bridge)** (a ~$10 board) plugged into your USB label printer, on firmware **1.9.2 or newer**
+- an **ESP32-S3 board** (a common ~$6 to $10 microcontroller) plugged into your USB label printer, running the free **[BTL Print Bridge](https://github.com/BTLtech1/esp32-label-printer-bridge)** firmware, version **1.9.2 or newer**
 - a **Shippo** account with your stores connected
 - a free **Cloudflare** account
 
