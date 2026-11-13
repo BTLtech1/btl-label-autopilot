@@ -1,2 +1,2 @@
-SHIPPO_API_KEY=shippo_live_xxxxxxxx # Replace with your LIVE Shippo API token
-ADMIN_PASSWORD=choose-a-password # Replace with your own password for the settings page (8+ characters)
+SHIPPO_API_KEY= # Your LIVE Shippo API token (starts with shippo_live_)
+ADMIN_PASSWORD= # Make up a password for your settings page (8+ characters)
