@@ -1,0 +1,27 @@
+{
+  "name": "btl-label-autopilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Buys and prints shipping labels by itself when you make a sale (Etsy, eBay, Shopify and more via Shippo), on a BTL Print Bridge.",
+  "license": "MIT",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SHIPPO_API_KEY": {
+        "description": "Your **live** Shippo API token. In Shippo, open the API page (Settings → API, or the Shippo developer portal) and make a **Live** token. It starts with `shippo_live_`. Labels are charged to your Shippo account."
+      },
+      "ADMIN_PASSWORD": {
+        "description": "Make up a password for your settings page. You'll type it when you open the page (any username works)."
+      },
+      "LABELS": {
+        "description": "Storage for your settings and the print queue. Leave as is."
+      }
+    }
+  }
+}

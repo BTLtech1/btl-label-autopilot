@@ -1,0 +1,11 @@
+{
+  // BTL Label Autopilot: Cloudflare Worker settings. Nothing here needs changing.
+  "name": "btl-label-autopilot",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  // The print queue and your settings are kept here. The Deploy button creates it for you.
+  "kv_namespaces": [{ "binding": "LABELS" }],
+  // Check Shippo for new paid orders every 15 minutes.
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "observability": { "enabled": true }
+}
