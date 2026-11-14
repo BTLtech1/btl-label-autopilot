@@ -32,7 +32,7 @@ Your computer can be off. Nothing reaches into your home network, so there's no 
 
 ### 1. Shippo
 
-1. Sign up at [goshippo.com](https://goshippo.com) and add a payment method (labels are charged to it).
+1. Sign up at [Shippo](https://try.shippo.com/pgl8mymf82zu) and add a payment method (labels are charged to it). That's my referral link: you get $50 in label credit after your first $50 of labels, and I get a small reward. Plain [goshippo.com](https://goshippo.com) works too.
 2. Connect your stores: **Settings → Stores** (Etsy, eBay, Shopify...).
 3. Make a **Live** API token on Shippo's API page. It starts with `shippo_live_`. Keep the tab open.
 4. Optional, for free test labels: also copy the **Test** token (`shippo_test_`).
