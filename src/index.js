@@ -2,7 +2,7 @@
 // Buys and prints shipping labels by itself when you make a sale.
 //
 //   Sale on Etsy / eBay / Shopify / ...  ->  Shippo imports the order
-//   Every 15 minutes this Worker asks Shippo for new paid orders, buys the cheapest label
+//   Every 5 minutes this Worker asks Shippo for new paid orders, buys the cheapest label
 //   (under your price cap) and puts it in a print queue: the "mailbox".
 //   A BTL Print Bridge next to your label printer checks the mailbox every few seconds
 //   and prints whatever is in it, with your item codes stamped on the label.
@@ -18,7 +18,7 @@
 //
 // https://github.com/BTLtech1/btl-label-autopilot   Made by BTL.
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const DAY = 60 * 60 * 24;
 const KEEP_ORDERS = DAY * 60;   // how long "already handled" markers are kept
 const KEEP_JOBS = DAY * 14;     // printed or not, labels leave the queue after this
@@ -39,6 +39,10 @@ const DEFAULTS = {
   showSite: true,
   siteTags: { Etsy: "ET", eBay: "EB", Shopify: "SH", Amazon: "AZ", WooCommerce: "WC", Stripe: "ST" },
   testKey: "",
+  // When labels are bought: "now" (as soon as an order is seen), "delay" (wait so buyers can
+  // cancel), or "times" (in batches at set times of day, in your time zone).
+  timing: { mode: "now", delayMin: 60, times: "07:00", tz: "America/Los_Angeles" },
+  heldSlips: true,   // print a "NEEDS YOU" slip when a label isn't bought
 };
 
 export default {
@@ -67,6 +71,7 @@ async function getSettings(env) {
     packages: s.packages?.length ? s.packages : s.parcel ? [{ name: "Package", ...s.parcel }] : DEFAULTS.packages,
     from: { ...DEFAULTS.from, ...(s.from || {}) },
     siteTags: { ...DEFAULTS.siteTags, ...(s.siteTags || {}) },
+    timing: { ...DEFAULTS.timing, ...(s.timing || {}) },
   };
 }
 
@@ -202,6 +207,55 @@ async function buyAndQueue(env, s, key, { addressTo, oz, orderId, ref, labelWord
 }
 
 // ---------------------------------------------------------------- marketplace orders (via Shippo)
+// ---------------------------------------------------------------- timing
+// Minutes from UTC to the given time zone right now (e.g. -480 for Pacific standard time).
+function tzOffsetMin(tz, now = new Date()) {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric",
+      day: "numeric", hour: "numeric", minute: "numeric" }).formatToParts(now).map((x) => [x.type, x.value]));
+    return Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - now.getTime()) / 60000);
+  } catch { return 0; }
+}
+const batchTimes = (t) => String(t.times || "").split(/[,\s]+/).map((x) => /^(\d{1,2}):(\d{2})$/.exec(x)).filter(Boolean).map((m) => +m[1] * 60 + +m[2]).filter((m) => m < 1440);
+
+// The most recent scheduled batch time at or before now (as a timestamp), or 0.
+function lastBatchTime(t, now = Date.now()) {
+  const off = tzOffsetMin(t.tz, new Date(now)) * 60000, local = now + off, day = Math.floor(local / 86400000) * 86400000;
+  let best = 0;
+  for (const m of batchTimes(t)) for (const d of [day, day - 86400000]) { const at = d + m * 60000 - off; if (at <= now && at > best) best = at; }
+  return best;
+}
+function nextBatchText(t, now = Date.now()) {
+  const off = tzOffsetMin(t.tz, new Date(now)) * 60000, local = now + off, day = Math.floor(local / 86400000) * 86400000;
+  let next = Infinity;
+  for (const m of batchTimes(t)) for (const d of [day, day + 86400000]) { const at = d + m * 60000 - off; if (at > now && at < next) next = at; }
+  return next === Infinity ? "no batch times set" : new Date(next).toLocaleString("en-US", { timeZone: t.tz, weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+// May an order placed at placedMs be bought now? "times" mode opens a 30-minute window at each batch time.
+async function mayBuy(env, s, placedMs, now = Date.now()) {
+  const t = s.timing;
+  if (t.mode === "delay") return now - placedMs >= Math.max(0, Number(t.delayMin) || 0) * 60000;
+  if (t.mode === "times") {
+    const at = lastBatchTime(t, now);
+    return !!at && now - at < 30 * 60000 && placedMs <= at;
+  }
+  return true;
+}
+
+// A big "NEEDS YOU" slip for an order whose label wasn't bought, so it isn't forgotten.
+// It's a blank picture plus a note the bridge prints large (bridge firmware 1.9.6+).
+const BLANK_PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABAQEAsTj2FAAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+async function queueHeldNote(env, s, { ref, codes, reason, country, app, printer }) {
+  if (!s.heldSlips) return;
+  const intl = country && String(country).toUpperCase() !== "US";
+  const price = /\$(\d+\.\d\d)/.exec(reason || "");
+  const head = intl ? "INTERNATIONAL" : /limit/.test(reason || "") && price ? `LABEL $${price[1]}` : "NOT BOUGHT";
+  const fit = (x) => String(x || "").replace(/[^\x20-\x7e]/g, "").replace(/\|/g, "/").slice(0, 18);
+  const where = intl && /etsy/i.test(app || "") ? "Buy it on Etsy" : "Buy it in Shippo";
+  await queueJob(env, BLANK_PNG, "", printer || s.printers[0].id, ["NEEDS YOU", head, fit(ref), fit(codes), where].join("|"));
+}
+
 async function checkOrders(env) {
   const s = await getSettings(env);
   if (!s.autoBuy) return { skipped: "Auto-buy is switched off on the settings page." };
@@ -223,6 +277,8 @@ async function checkOrders(env) {
     if (SKIP_APPS.includes(app)) continue;
     if (only.length && !only.includes(app.toLowerCase())) continue;
     if ((o.transactions || []).length) continue;               // already has a label
+    const placed = Date.parse(o.placed_at || o.object_created || "") || Date.now();
+    if (!(await mayBuy(env, s, placed))) continue;              // not time yet (delay or batch times)
     const doneKey = `order:${o.object_id}`;
     if (await env.LABELS.get(doneKey)) continue;
     await env.LABELS.put(doneKey, "buying", { expirationTtl: KEEP_ORDERS });
@@ -240,8 +296,10 @@ async function checkOrders(env) {
     await env.LABELS.put(doneKey, JSON.stringify(r), { expirationTtl: KEEP_ORDERS });
     const entry = { at: new Date().toISOString(), order: ref, codes, ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) };
     await logEntry(env, entry);
+    if (!r.ok) await queueHeldNote(env, s, { ref, codes, reason: r.reason, country: o.to_address?.country, app, printer: printerFor(lines, s) });
     handled.push(entry);
   }
+  handled.push(...(await buyPendingStripe(env, s)));
   return { since, handled };
 }
 
@@ -265,31 +323,74 @@ async function stripeHook(request, env) {
   if (!res.ok) return text(`Stripe line items error ${res.status}`, 502);   // Stripe will retry
   const lines = ((await res.json()).data || []).map((li) => ({ title: li.description || "", quantity: li.quantity || 1 }));
   const a = ship.address;
-  const addressTo = { name: ship.name, street1: a.line1, street2: a.line2 || "", city: a.city, state: a.state,
-                      zip: a.postal_code, country: a.country, email: session.customer_details?.email || s.from.email };
-  const ref = `Stripe ${session.id.slice(-8).toUpperCase()}`;
-  const codes = codesFor(lines, s.rules);
+  const order = {
+    id: session.id, placed: Date.now(), lines,
+    addressTo: { name: ship.name, street1: a.line1, street2: a.line2 || "", city: a.city, state: a.state,
+                 zip: a.postal_code, country: a.country, email: session.customer_details?.email || s.from.email },
+  };
+  if (s.timing.mode !== "now" && s.autoBuy) {
+    // Wait for the delay or the next batch: keep it in a list the 15-minute check works through.
+    const pending = (await env.LABELS.get("pending_stripe", "json")) || [];
+    if (!pending.some((p) => p.id === order.id)) pending.push(order);
+    await env.LABELS.put("pending_stripe", JSON.stringify(pending.slice(-100)));
+    await env.LABELS.put(doneKey, "waiting", { expirationTtl: KEEP_ORDERS });
+    return text("Order saved; its label will be bought at the scheduled time");
+  }
+  const r = await stripeBuy(env, s, order);
+  if (r.retry) return text(r.retry, 502);
+  return text(r.ok ? `Label bought (${r.tracking}) and queued for printing` : `Not bought (${r.reason}); order added to Shippo`);
+}
 
+// Buys (or hands to Shippo by hand) one website order. Returns the result.
+async function stripeBuy(env, s, order) {
+  const doneKey = `stripe:${order.id}`;
+  const ref = `Stripe ${order.id.slice(-8).toUpperCase()}`;
+  const codes = codesFor(order.lines, s.rules);
   let r = { ok: false, reason: "Auto-buy is switched off" };
   if (s.autoBuy && env.SHIPPO_API_KEY && fromReady(s)) {
     await env.LABELS.put(doneKey, "buying", { expirationTtl: KEEP_ORDERS });
     r = await buyAndQueue(env, s, env.SHIPPO_API_KEY, {
-      addressTo, oz: ouncesFor(lines, s.rules, s.defaultOz), ref, pkg: packageFor(lines, s), printer: printerFor(lines, s),
+      addressTo: order.addressTo, oz: ouncesFor(order.lines, s.rules, s.defaultOz), ref, pkg: packageFor(order.lines, s), printer: printerFor(order.lines, s),
       labelWords: labelText(codes, s.showSite ? s.siteTags.Stripe : ""),
     });
   }
   if (!r.ok && env.SHIPPO_API_KEY) {
     // Not bought: put the order in Shippo so you can buy the label there by hand.
     const made = await shippo("/orders/", env.SHIPPO_API_KEY, {
-      order_number: ref, order_status: "PAID", placed_at: new Date().toISOString(), to_address: addressTo,
-      line_items: lines.map((l) => ({ title: l.title, quantity: l.quantity })),
-      weight: ouncesFor(lines, s.rules, s.defaultOz).toFixed(2), weight_unit: "oz",
+      order_number: ref, order_status: "PAID", placed_at: new Date(order.placed).toISOString(), to_address: order.addressTo,
+      line_items: order.lines.map((l) => ({ title: l.title, quantity: l.quantity })),
+      weight: ouncesFor(order.lines, s.rules, s.defaultOz).toFixed(2), weight_unit: "oz",
     });
-    if (!made.ok) { await env.LABELS.delete(doneKey); return text(`Shippo error ${made.status}`, 502); }
+    if (!made.ok) { await env.LABELS.delete(doneKey); return { retry: `Shippo error ${made.status}` }; }
+    await queueHeldNote(env, s, { ref, codes, reason: r.reason, country: order.addressTo.country, app: "Stripe", printer: printerFor(order.lines, s) });
   }
   await env.LABELS.put(doneKey, JSON.stringify(r), { expirationTtl: KEEP_ORDERS });
-  await logEntry(env, { at: new Date().toISOString(), order: ref, codes, ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) });
-  return text(r.ok ? `Label bought (${r.tracking}) and queued for printing` : `Not bought (${r.reason}); order added to Shippo`);
+  const entry = { at: new Date().toISOString(), order: ref, codes, ...(r.ok ? { tracking: r.tracking, cost: r.cost, service: r.service } : { held: r.reason }) };
+  await logEntry(env, entry);
+  return { ...r, entry };
+}
+
+// Website orders waiting for their delay or batch time. Refunded ones are dropped, not shipped.
+async function buyPendingStripe(env, s) {
+  const pending = (await env.LABELS.get("pending_stripe", "json")) || [];
+  if (!pending.length || !s.autoBuy) return [];
+  const keep = [], done = [];
+  for (const order of pending) {
+    if (done.length >= MAX_PER_CHECK || !(await mayBuy(env, s, order.placed))) { keep.push(order); continue; }
+    if (env.STRIPE_API_KEY) {
+      const c = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(order.id)}?expand[]=payment_intent.latest_charge`,
+                            { headers: { Authorization: `Bearer ${env.STRIPE_API_KEY}` } }).then((x) => x.ok ? x.json() : null).catch(() => null);
+      if (c?.payment_intent?.latest_charge?.refunded) {
+        await env.LABELS.put(`stripe:${order.id}`, JSON.stringify({ ok: false, reason: "refunded before shipping" }), { expirationTtl: KEEP_ORDERS });
+        await logEntry(env, { at: new Date().toISOString(), order: `Stripe ${order.id.slice(-8).toUpperCase()}`, held: "refunded before the label was bought, so nothing was bought" });
+        continue;
+      }
+    }
+    const r = await stripeBuy(env, s, order);
+    if (r.retry) keep.push(order); else done.push(r.entry);
+  }
+  await env.LABELS.put("pending_stripe", JSON.stringify(keep));
+  return done;
 }
 
 async function verifyStripe(payload, header, secret) {
@@ -312,9 +413,9 @@ function same(a, b) {
 
 // ---------------------------------------------------------------- print queue (the mailbox)
 // The bridge asks GET /print/next every few seconds and confirms with POST /print/ack?id=...
-async function queueJob(env, body, words, printer = "main") {
+async function queueJob(env, body, words, printer = "main", note = "") {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await env.LABELS.put(`job:${id}`, body, { expirationTtl: KEEP_JOBS, metadata: { text: words || "" } });
+  await env.LABELS.put(`job:${id}`, body, { expirationTtl: KEEP_JOBS, metadata: { text: words || "", note } });
   const q = (await env.LABELS.get(pk("queue", printer), "json")) || [];
   const keep = [];
   for (const j of q) if (!(await env.LABELS.get(`done:${j}`))) keep.push(j);
@@ -362,7 +463,7 @@ async function printRoute(request, url, env) {
       const { value, metadata } = await env.LABELS.getWithMetadata(`job:${id}`, { type: "arrayBuffer" });
       if (!value) continue;
       if (!takesPng) return text("Update your BTL Print Bridge to firmware 1.9.2 or newer to print labels.", 426);
-      return new Response(value, { headers: { "Content-Type": "image/png", "X-Job-Id": id, "X-Label-Text": (metadata?.text || "").replace(/[^\x20-\x7e]/g, "") } });
+      return new Response(value, { headers: { "Content-Type": "image/png", "X-Job-Id": id, "X-Label-Text": (metadata?.text || "").replace(/[^\x20-\x7e]/g, ""), ...(metadata?.note ? { "X-Label-Note": metadata.note.replace(/[^\x20-\x7e]/g, "") } : {}) } });
     }
     return new Response(null, { status: 204 });
   }
@@ -453,6 +554,8 @@ async function latestVersion() {
 }
 const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
 
+const validTz = (tz) => { try { return !!tz && !!new Intl.DateTimeFormat("en-US", { timeZone: tz }); } catch { return false; } };
+
 function readPrinters(g, old) {
   const out = [];
   for (const p of old.printers) {
@@ -494,6 +597,13 @@ function readForm(f, old) {
     autoBuy: f.get("autoBuy") === "on",
     capCents: Math.round(num("cap", old.capCents / 100) * 100),
     carriers: g("carriers") === "any" ? "any" : "usps",
+    heldSlips: f.get("heldSlips") === "on",
+    timing: {
+      mode: ["now", "delay", "times"].includes(g("tmode")) ? g("tmode") : "now",
+      delayMin: Math.max(0, Math.round(num("tdelay", old.timing.delayMin))),
+      times: g("ttimes") || old.timing.times,
+      tz: validTz(g("ttz")) ? g("ttz") : old.timing.tz,
+    },
     packages: readPackages(g, num, old),
     printers: readPrinters(g, old),
     mixedPrinter: g("mixedPrinter") || "main",
@@ -562,7 +672,9 @@ function settingsHtml(s, x) {
       <form method="post" action="/admin/test">${multi ? `<select name="printer" style="display:inline-block;width:auto;margin:0 6px 0 0">${printerOpts("main")}</select>` : ""}<button>Print a free test label</button></form>
       <form method="post" action="/admin/check"><button>Check for new orders now</button></form>
     </div>
-    <p class="muted">New orders are checked every 15 minutes by themselves.</p>
+    <p class="muted">${s.timing.mode === "times" ? `Labels are bought in batches. Next batch: <b>${esc(nextBatchText(s.timing))}</b>.`
+      : s.timing.mode === "delay" ? `Labels are bought once an order is ${esc(s.timing.delayMin)} minutes old.` : "Labels are bought as soon as an order comes in."}
+      Stores are checked every 5 minutes.</p>
   </section>
 
   <section>
@@ -580,6 +692,15 @@ function settingsHtml(s, x) {
       <label>Carrier<select name="carriers"><option value="usps" ${s.carriers === "usps" ? "selected" : ""}>USPS only</option><option value="any" ${s.carriers === "any" ? "selected" : ""}>Cheapest of any carrier</option></select></label>
     </div>
     <p class="muted">Orders whose cheapest label costs more than this wait for you in Shippo.</p>
+    <label class="check"><input type="checkbox" name="heldSlips" ${s.heldSlips ? "checked" : ""}> Print a "NEEDS YOU" slip when a label isn't bought (over the limit, international, address problem)</label>
+    <h3>When to buy</h3>
+    <label class="check"><input type="radio" name="tmode" value="now" ${s.timing.mode === "now" ? "checked" : ""}> Right away</label>
+    <label class="check"><input type="radio" name="tmode" value="delay" ${s.timing.mode === "delay" ? "checked" : ""}> After a wait, so buyers can cancel first:
+      <input name="tdelay" value="${esc(s.timing.delayMin)}" inputmode="numeric" style="width:70px;display:inline-block;margin:0 6px"> minutes</label>
+    <label class="check"><input type="radio" name="tmode" value="times" ${s.timing.mode === "times" ? "checked" : ""}> In batches at set times:
+      <input name="ttimes" value="${esc(s.timing.times)}" placeholder="07:00, 13:00" style="width:160px;display:inline-block;margin:0 6px"></label>
+    ${field("ttz", "Your time zone (for batch times)", s.timing.tz, 'placeholder="America/Los_Angeles"')}
+    <p class="muted">Website orders can be bought within seconds. Etsy, eBay and other stores also wait for Shippo to import them (real time, or up to an hour depending on the store) and for the next check, every 5 minutes. Batch times use 24-hour time, like 07:00 or 15:30.</p>
     <h3>Packages you ship in</h3>
     <table class="rules"><tr><th>Name</th><th>Length (in)</th><th>Width (in)</th><th>Height (in)</th></tr>${pkgRows}</table>
     <p class="muted">The first one is used unless an item code below says otherwise. An order with several items goes in the biggest package any of them needs. A 6 x 9 bubble mailer is 9 x 6 x 1.</p>

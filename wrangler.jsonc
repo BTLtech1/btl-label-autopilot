@@ -5,8 +5,8 @@
   "compatibility_date": "2025-09-01",
   // The print queue and your settings are kept here. The Deploy button creates it for you.
   "kv_namespaces": [{ "binding": "LABELS" }],
-  // Check Shippo for new paid orders every 15 minutes.
-  "triggers": { "crons": ["*/15 * * * *"] },
+  // Check Shippo for new paid orders every 5 minutes.
+  "triggers": { "crons": ["*/5 * * * *"] },
   // Your Worker gets a free address ending in .workers.dev; that is where the settings page lives.
   "workers_dev": true,
   "preview_urls": false,

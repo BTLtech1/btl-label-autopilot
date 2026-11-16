@@ -23,7 +23,7 @@ flowchart LR
 ```
 
 1. **You make a sale.** Shippo imports the order from your store.
-2. **Every 15 minutes, Label Autopilot asks Shippo for new paid orders.** For each one it buys the cheapest label under your price limit and drops it in its mailbox (a print queue).
+2. **Every 5 minutes, Label Autopilot asks Shippo for new paid orders.** For each one it buys the cheapest label under your price limit and drops it in its mailbox (a print queue).
 3. **Your bridge checks the mailbox every few seconds** over your Wi-Fi, like a phone opening a website. If there's a label, it prints it and says "got it".
 
 Your computer can be off. Nothing reaches into your home network, so there's no router setup. If the printer is unplugged or out of power, labels wait in the mailbox (up to 14 days) and print when it's back.
@@ -75,6 +75,12 @@ Click **Print a free test label** on the settings page. It should print within a
 ## What the label says
 
 `2x G3, SD / ET` means: two G3s and one SD, from Etsy. Store tags (ET, EB, SH, AZ, WC, ST) can be changed or switched off on the settings page.
+
+## When labels are bought
+
+On the settings page, choose **Right away**, **After a wait** (so buyers can cancel first) or **In batches at set times** (like 07:00 and 13:00). Website orders that get refunded while waiting are skipped. Etsy, eBay and other stores also depend on how often Shippo imports their orders (real time or up to an hour).
+
+If a label isn't bought (over your limit, international, address problem), a big **NEEDS YOU** slip prints instead, so the order isn't forgotten.
 
 ## More than one printer
 
